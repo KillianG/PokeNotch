@@ -217,7 +217,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 // Create keyframe animation
                 let animation = CAKeyframeAnimation(keyPath: "contents")
                 animation.values = frames
-                animation.duration = totalDuration
+                animation.duration = totalDuration * 2
                 animation.repeatCount = .infinity
                 animation.calculationMode = .discrete // No interpolation between frames
 
