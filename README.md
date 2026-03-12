@@ -2,7 +2,9 @@
 
 A macOS menu bar app that displays animated Pokémon sprites right next to your MacBook's notch.
 
-![PokeNotch Screenshot](screenshots/pokebar-notch.png)
+![PokeNotch Demo 1](screenshots/pokebar-1.gif)
+![PokeNotch Demo 2](screenshots/pokebar-2.gif)
+![PokeNotch Demo 3](screenshots/pokebar-3.gif)
 
 ## Features
 
