@@ -2,6 +2,27 @@ import Cocoa
 import ImageIO
 import QuartzCore
 
+// MARK: - Hover-tracking view
+
+class SpriteContentView: NSView {
+    var onMouseEntered: (() -> Void)?
+    var onMouseExited: (() -> Void)?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways],
+            owner: self,
+            userInfo: nil
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) { onMouseEntered?() }
+    override func mouseExited(with event: NSEvent) { onMouseExited?() }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var floatingWindow: NSWindow!
@@ -10,6 +31,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var intervalMinutes: Double = 5
     private let totalPokemon = 649
     private let spriteSize: CGFloat = 68
+    private var currentFrenchName: String?
+    private var nameLabel: NSTextField?
+    private var hoverTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Small menu bar item for controls
@@ -71,7 +95,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         floatingWindow.ignoresMouseEvents = false
         floatingWindow.hasShadow = false
 
-        let contentView = NSView(frame: NSRect(x: 0, y: 0, width: spriteSize, height: spriteSize))
+        let contentView = SpriteContentView(frame: NSRect(x: 0, y: 0, width: spriteSize, height: spriteSize))
         contentView.wantsLayer = true
         contentView.layer?.backgroundColor = .clear
 
@@ -80,6 +104,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         spriteLayer.contentsGravity = .resizeAspect
         spriteLayer.magnificationFilter = .nearest // Crisp pixel art!
         contentView.layer?.addSublayer(spriteLayer)
+
+        // Name label (hidden by default, shown on hover)
+        let label = NSTextField(labelWithString: "")
+        label.font = NSFont.boldSystemFont(ofSize: 11)
+        label.textColor = .white
+        label.backgroundColor = NSColor.black.withAlphaComponent(0.75)
+        label.isBezeled = false
+        label.isEditable = false
+        label.alignment = .center
+        label.wantsLayer = true
+        label.layer?.cornerRadius = 4
+        label.isHidden = true
+        label.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+            label.bottomAnchor.constraint(equalTo: contentView.topAnchor, constant: 16),
+            label.widthAnchor.constraint(lessThanOrEqualToConstant: 150),
+        ])
+        nameLabel = label
+
+        contentView.onMouseEntered = { [weak self] in self?.startHoverTimer() }
+        contentView.onMouseExited = { [weak self] in self?.cancelHover() }
 
         floatingWindow.contentView = contentView
         floatingWindow.orderFrontRegardless()
@@ -134,6 +181,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         startTimer()
     }
 
+    // MARK: - Hover
+
+    private func startHoverTimer() {
+        hoverTimer?.invalidate()
+        hoverTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
+            guard let self = self, let name = self.currentFrenchName else { return }
+            self.nameLabel?.stringValue = name
+            self.nameLabel?.isHidden = false
+        }
+    }
+
+    private func cancelHover() {
+        hoverTimer?.invalidate()
+        hoverTimer = nil
+        nameLabel?.isHidden = true
+    }
+
     // MARK: - Timer
 
     private func startTimer() {
@@ -159,6 +223,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 if let menuItem = self?.statusItem.menu?.item(withTag: 999) {
                     menuItem.title = "#\(pokeId) \(name.capitalized)"
+                }
+            }
+        }.resume()
+
+        // Fetch French name from species endpoint
+        let speciesURL = URL(string: "https://pokeapi.co/api/v2/pokemon-species/\(pokeId)")!
+        URLSession.shared.dataTask(with: speciesURL) { [weak self] data, _, _ in
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let names = json["names"] as? [[String: Any]] else { return }
+            let frenchName = names.first { entry in
+                if let lang = entry["language"] as? [String: Any],
+                   let langName = lang["name"] as? String {
+                    return langName == "fr"
+                }
+                return false
+            }
+            if let name = frenchName?["name"] as? String {
+                DispatchQueue.main.async {
+                    self?.currentFrenchName = name
+                    self?.nameLabel?.isHidden = true
                 }
             }
         }.resume()
