@@ -2,27 +2,6 @@ import Cocoa
 import ImageIO
 import QuartzCore
 
-// MARK: - Hover-tracking view
-
-class SpriteContentView: NSView {
-    var onMouseEntered: (() -> Void)?
-    var onMouseExited: (() -> Void)?
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        for area in trackingAreas { removeTrackingArea(area) }
-        addTrackingArea(NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways],
-            owner: self,
-            userInfo: nil
-        ))
-    }
-
-    override func mouseEntered(with event: NSEvent) { onMouseEntered?() }
-    override func mouseExited(with event: NSEvent) { onMouseExited?() }
-}
-
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var floatingWindow: NSWindow!
@@ -30,10 +9,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var timer: Timer?
     private var intervalMinutes: Double = 5
     private let totalPokemon = 649
-    private let spriteSize: CGFloat = 68
+    private let spriteSize: CGFloat = 48
     private var currentFrenchName: String?
     private var nameLabel: NSTextField?
+    private var nameLabelWindow: NSWindow?
     private var hoverTimer: Timer?
+    private var mouseCheckTimer: Timer?
+    private var isMouseInside = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Small menu bar item for controls
@@ -71,13 +53,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         var yPos: CGFloat
 
         if #available(macOS 12.0, *), let topRight = screen.auxiliaryTopRightArea {
-            // Place sprite right next to the notch on the right side
-            // topRight is in screen coordinates (origin bottom-left)
-            // e.g. (1010, 1131, 790, 38) means notch ends at x=1010
             xPos = screen.frame.origin.x + topRight.origin.x + 10
             yPos = screen.frame.origin.y + screen.frame.height - spriteSize
         } else {
-            // No notch — center at top of main screen
             xPos = screen.frame.origin.x + (screen.frame.width - spriteSize) / 2
             yPos = screen.frame.origin.y + screen.frame.height - spriteSize
         }
@@ -92,10 +70,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         floatingWindow.backgroundColor = .clear
         floatingWindow.level = .statusBar
         floatingWindow.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-        floatingWindow.ignoresMouseEvents = false
+        floatingWindow.ignoresMouseEvents = true
         floatingWindow.hasShadow = false
 
-        let contentView = SpriteContentView(frame: NSRect(x: 0, y: 0, width: spriteSize, height: spriteSize))
+        let contentView = NSView(frame: NSRect(x: 0, y: 0, width: spriteSize, height: spriteSize))
         contentView.wantsLayer = true
         contentView.layer?.backgroundColor = .clear
 
@@ -105,31 +83,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         spriteLayer.magnificationFilter = .nearest // Crisp pixel art!
         contentView.layer?.addSublayer(spriteLayer)
 
-        // Name label (hidden by default, shown on hover)
+        floatingWindow.contentView = contentView
+        floatingWindow.orderFrontRegardless()
+
+        // Label as a child window of the floating window
+        let labelWidth: CGFloat = 150
+        let labelHeight: CGFloat = 18
+        let labelX = xPos + (spriteSize - labelWidth) / 2
+        let labelY = yPos - labelHeight - 2
+        let labelWin = NSWindow(contentRect: NSRect(x: labelX, y: labelY, width: labelWidth, height: labelHeight),
+                                styleMask: .borderless, backing: .buffered, defer: false)
+        labelWin.isOpaque = false
+        labelWin.backgroundColor = .clear
+        labelWin.level = .statusBar
+        labelWin.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        labelWin.ignoresMouseEvents = true
+        labelWin.hasShadow = false
+
         let label = NSTextField(labelWithString: "")
         label.font = NSFont.boldSystemFont(ofSize: 11)
         label.textColor = .white
         label.backgroundColor = NSColor.black.withAlphaComponent(0.75)
+        label.drawsBackground = true
         label.isBezeled = false
         label.isEditable = false
         label.alignment = .center
         label.wantsLayer = true
         label.layer?.cornerRadius = 4
-        label.isHidden = true
-        label.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(label)
-        NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
-            label.bottomAnchor.constraint(equalTo: contentView.topAnchor, constant: 16),
-            label.widthAnchor.constraint(lessThanOrEqualToConstant: 150),
-        ])
+        label.layer?.masksToBounds = true
+        label.frame = NSRect(x: 0, y: 0, width: labelWidth, height: labelHeight)
+        label.autoresizingMask = [.width, .height]
+        labelWin.contentView = label
         nameLabel = label
+        nameLabelWindow = labelWin
 
-        contentView.onMouseEntered = { [weak self] in self?.startHoverTimer() }
-        contentView.onMouseExited = { [weak self] in self?.cancelHover() }
+        // Add as child window so it inherits parent's display
+        floatingWindow.addChildWindow(labelWin, ordered: .above)
+        labelWin.orderOut(nil)
 
-        floatingWindow.contentView = contentView
-        floatingWindow.orderFrontRegardless()
+        startMouseMonitor()
     }
 
     // MARK: - Menu
@@ -181,21 +173,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         startTimer()
     }
 
-    // MARK: - Hover
+    // MARK: - Hover (polling timer, clicks pass through)
+
+    private func startMouseMonitor() {
+        let t = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
+            self?.checkMousePosition()
+        }
+        RunLoop.main.add(t, forMode: .common)
+        mouseCheckTimer = t
+    }
+
+    private func checkMousePosition() {
+        let mouseLocation = NSEvent.mouseLocation
+        let inside = floatingWindow.frame.contains(mouseLocation)
+
+        if inside && !isMouseInside {
+            isMouseInside = true
+            startHoverTimer()
+        } else if !inside && isMouseInside {
+            isMouseInside = false
+            cancelHover()
+        }
+    }
 
     private func startHoverTimer() {
         hoverTimer?.invalidate()
-        hoverTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
+        let t = Timer(timeInterval: 3.0, repeats: false) { [weak self] _ in
             guard let self = self, let name = self.currentFrenchName else { return }
             self.nameLabel?.stringValue = name
-            self.nameLabel?.isHidden = false
+            self.nameLabelWindow?.orderFront(nil)
         }
+        RunLoop.main.add(t, forMode: .common)
+        hoverTimer = t
     }
 
     private func cancelHover() {
         hoverTimer?.invalidate()
         hoverTimer = nil
-        nameLabel?.isHidden = true
+        nameLabelWindow?.orderOut(nil)
     }
 
     // MARK: - Timer
@@ -243,7 +258,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if let name = frenchName?["name"] as? String {
                 DispatchQueue.main.async {
                     self?.currentFrenchName = name
-                    self?.nameLabel?.isHidden = true
                 }
             }
         }.resume()
