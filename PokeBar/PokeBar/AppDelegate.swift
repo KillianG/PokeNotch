@@ -16,6 +16,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var hoverTimer: Timer?
     private var mouseCheckTimer: Timer?
     private var isMouseInside = false
+    private let horizontalOffsetKey = "horizontalOffset"
+    private var horizontalOffset: CGFloat {
+        get { CGFloat(UserDefaults.standard.double(forKey: horizontalOffsetKey)) }
+        set { UserDefaults.standard.set(Double(newValue), forKey: horizontalOffsetKey) }
+    }
+    private let offsetPresets: [CGFloat] = [-300, -200, -100, -50, 0, 50, 100, 150, 200, 300, 400]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Small menu bar item for controls
@@ -59,6 +65,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             xPos = screen.frame.origin.x + (screen.frame.width - spriteSize) / 2
             yPos = screen.frame.origin.y + screen.frame.height - spriteSize
         }
+
+        xPos += horizontalOffset
 
         let frame = NSRect(x: xPos, y: yPos, width: spriteSize, height: spriteSize)
 
@@ -145,6 +153,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         intervalItem.submenu = intervalSubmenu
         menu.addItem(intervalItem)
 
+        let positionItem = NSMenuItem(title: "Horizontal Offset", action: nil, keyEquivalent: "")
+        let positionSubmenu = NSMenu()
+        for offset in offsetPresets {
+            let title: String
+            if offset == 0 {
+                title = "Default (0 px)"
+            } else if offset > 0 {
+                title = "+\(Int(offset)) px (right)"
+            } else {
+                title = "\(Int(offset)) px (left)"
+            }
+            let item = NSMenuItem(title: title, action: #selector(changeOffset(_:)), keyEquivalent: "")
+            item.representedObject = offset
+            if offset == horizontalOffset {
+                item.state = .on
+            }
+            positionSubmenu.addItem(item)
+        }
+        positionItem.submenu = positionSubmenu
+        menu.addItem(positionItem)
+
         menu.addItem(NSMenuItem.separator())
 
         let pokemonNameItem = NSMenuItem(title: "Loading...", action: nil, keyEquivalent: "")
@@ -171,6 +200,43 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         sender.state = .on
         startTimer()
+    }
+
+    @objc private func changeOffset(_ sender: NSMenuItem) {
+        guard let offset = sender.representedObject as? CGFloat else { return }
+        horizontalOffset = offset
+        if let submenu = sender.menu {
+            for item in submenu.items { item.state = .off }
+        }
+        sender.state = .on
+        repositionFloatingWindow()
+    }
+
+    private func repositionFloatingWindow() {
+        guard let screen = findNotchScreen() ?? NSScreen.main else { return }
+
+        var xPos: CGFloat
+        let yPos: CGFloat
+
+        if #available(macOS 12.0, *), let topRight = screen.auxiliaryTopRightArea {
+            xPos = screen.frame.origin.x + topRight.origin.x + 10
+            yPos = screen.frame.origin.y + screen.frame.height - spriteSize
+        } else {
+            xPos = screen.frame.origin.x + (screen.frame.width - spriteSize) / 2
+            yPos = screen.frame.origin.y + screen.frame.height - spriteSize
+        }
+
+        xPos += horizontalOffset
+
+        floatingWindow.setFrameOrigin(NSPoint(x: xPos, y: yPos))
+
+        if let labelWin = nameLabelWindow {
+            let labelWidth = labelWin.frame.width
+            let labelHeight = labelWin.frame.height
+            let labelX = xPos + (spriteSize - labelWidth) / 2
+            let labelY = yPos - labelHeight - 2
+            labelWin.setFrameOrigin(NSPoint(x: labelX, y: labelY))
+        }
     }
 
     // MARK: - Hover (polling timer, clicks pass through)
